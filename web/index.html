@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>企业制度知识助手 · 审批台</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; color: #1f2937; }
+    h1 { font-size: 22px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; margin: 12px 0; }
+    .meta { color: #6b7280; font-size: 13px; }
+    pre { white-space: pre-wrap; word-break: break-all; background: #f9fafb; padding: 10px; border-radius: 6px; }
+    button { border: 0; border-radius: 6px; padding: 8px 16px; cursor: pointer; margin-right: 8px; }
+    .approve { background: #2563eb; color: white; }
+    .reject { background: #e5e7eb; color: #111827; }
+    #chat-output { min-height: 80px; background: #f9fafb; border-radius: 6px; padding: 12px; }
+    input, select { padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>审批台</h1>
+  <p class="meta">敏感操作在此批准或拒绝；决定会写回审计日志并续跑对话。</p>
+  <div id="approvals">加载中...</div>
+
+  <h1 style="margin-top:36px">对话测试</h1>
+  <div class="card">
+    <input id="thread" value="default" size="14" placeholder="thread_id">
+    <select id="role">
+      <option value="query">query</option>
+      <option value="write">write</option>
+      <option value="admin">admin</option>
+    </select>
+    <input id="question" size="48" placeholder="例如：差旅住宿报销标准是多少？">
+    <button class="approve" onclick="send()">发送</button>
+    <div id="chat-output"></div>
+  </div>
+
+  <script>
+    async function loadApprovals() {
+      const records = await (await fetch('/api/approvals')).json();
+      const pending = records.filter(r => r.status === 'pending');
+      const target = document.getElementById('approvals');
+      if (!pending.length) { target.textContent = '暂无待审批事项'; return; }
+      target.innerHTML = '';
+      for (const item of pending) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `<div class="meta">${item.thread_id} · ${item.tool} · ${item.created_at}</div>
+          <div><strong>原因：</strong>${item.reason || ''}</div>
+          <pre>${JSON.stringify(item.args, null, 2)}</pre>
+          <button class="approve" onclick="decide('${item.thread_id}', true)">批准</button>
+          <button class="reject" onclick="decide('${item.thread_id}', false)">拒绝</button>`;
+        target.appendChild(card);
+      }
+    }
+
+    async function decide(threadId, approved) {
+      await fetch(`/threads/${encodeURIComponent(threadId)}/resume`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({approved, approver: 'admin', role: 'write'})
+      });
+      setTimeout(loadApprovals, 300);
+    }
+
+    async function send() {
+      const out = document.getElementById('chat-output');
+      out.textContent = '';
+      const body = {
+        thread_id: document.getElementById('thread').value,
+        role: document.getElementById('role').value,
+        message: document.getElementById('question').value
+      };
+      const response = await fetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop();
+        for (const part of parts) {
+          const event = (part.match(/^event: (.+)$/m) || [])[1];
+          const raw = (part.match(/^data: (.+)$/m) || [])[1];
+          if (!raw) continue;
+          const data = JSON.parse(raw);
+          if (event === 'message') out.textContent += data.content + '\n';
+          if (event === 'interrupt') out.textContent += '\n[待审批] ' + JSON.stringify(data) + '\n';
+          if (event === 'error') out.textContent += '\n[错误] ' + data.message;
+        }
+      }
+      loadApprovals();
+    }
+
+    loadApprovals();
+    setInterval(loadApprovals, 5000);
+  </script>
+</body>
+</html>
