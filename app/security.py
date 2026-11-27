@@ -53,6 +53,7 @@ def check_permission(role: str, tool_name: str) -> None:
         raise ToolPermissionError(f"角色 {role} 无权调用工具 {tool_name}")
 
 
+
 def validate_path(raw_path: str, allowed_dirs: list[Path]) -> Path:
     path = Path(raw_path)
     if ".." in path.parts or path.is_absolute():
